@@ -1,4 +1,4 @@
-
+# Import the necessary libraries
 import pdfplumber
 from google.colab import files
 from sentence_transformers import SentenceTransformer
@@ -6,82 +6,92 @@ import faiss
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-# Step 3: Upload the PDF file
+# Upload the PDF file
 uploaded = files.upload()
 pdf_path = list(uploaded.keys())[0]
 
-# Step 4: Extract content from the PDF
+# Open the PDF and check the number of pages
 with pdfplumber.open(pdf_path) as pdf:
-    # Page 2: Extract text
-    page2_text = pdf.pages[1].extract_text()
-    # Page 6: Extract table data
-    page6_table = pdf.pages[5].extract_table()
+    total_pages = len(pdf.pages)
+    print(f"Total number of pages in the PDF: {total_pages}")
+    
+    # Check if there are enough pages
+    if total_pages > 1:
+        page2_text = pdf.pages[1].extract_text()  # Extract text from page 2
+        print("Page 2 Text:\n", page2_text)
+    else:
+        print("Page 2 does not exist in this PDF.")
 
-# Print the extracted text and table for verification
-print("Page 2 Text:\n", page2_text)
-print("\nPage 6 Table:\n", page6_table)
+    if total_pages > 5:
+        page6_table = pdf.pages[5].extract_table()  # Extract table from page 6
+        print("\nPage 6 Table:\n", page6_table)
+    else:
+        print("Page 6 does not exist in this PDF.")
 
-# Step 5: Initialize the embedding model (Sentence-BERT)
+# Initialize the Sentence-BERT model for embeddings
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Step 6: Prepare chunks for embedding
-chunks = [page2_text] + [str(row) for row in page6_table]  # Combine text and table rows
+# Prepare the text chunks (combining text from page 2 and table rows from page 6)
+chunks = [page2_text] + [str(row) for row in page6_table]
 
-# Step 7: Generate embeddings for the chunks
+# Generate embeddings for the chunks
 embeddings = model.encode(chunks)
 
-# Step 8: Store embeddings in FAISS index for similarity search
-dimension = embeddings.shape[1]  # Embedding dimension
-index = faiss.IndexFlatL2(dimension)  # L2 similarity index
-index.add(np.array(embeddings))  # Add embeddings to FAISS index
+# Store the embeddings in a FAISS index for similarity-based retrieval
+dimension = embeddings.shape[1]  # Get the dimensionality of the embeddings
+index = faiss.IndexFlatL2(dimension)  # Create an L2 similarity index
+index.add(np.array(embeddings))  # Add embeddings to the FAISS index
 
-print("Embeddings stored in FAISS index.")
+print("Embeddings successfully stored in FAISS index.")
 
-# Step 9: Define search function to find the most relevant chunks based on a user query
-def search(query, model, index, chunks):
-    # Generate query embedding
+# Function to search for the most relevant chunks based on the user's query
+def search_relevant_chunks(query):
+    # Convert the query into embeddings
     query_embedding = model.encode([query])
     
-    # Search for the top-3 most similar chunks
+    # Search for the top 3 most similar chunks
     _, indices = index.search(np.array(query_embedding), k=3)
-    results = [chunks[i] for i in indices[0]]
-    return results
+    
+    # Retrieve the corresponding chunks
+    relevant_chunks = [chunks[i] for i in indices[0]]
+    return relevant_chunks
 
-# Step 10: User input for query
-user_query = input("Enter your query: ")
+# User input for the query
+user_query = input("Please enter your query: ")
 
-# Step 11: Retrieve relevant chunks based on the query
-retrieved_chunks = search(user_query, model, index, chunks)
+# Get the relevant chunks based on the user's query
+retrieved_chunks = search_relevant_chunks(user_query)
 
-# Print retrieved chunks
-print("Retrieved Chunks:\n", retrieved_chunks)
+# Display the retrieved chunks
+print("Relevant Chunks Found:\n", retrieved_chunks)
 
-# Step 12: Load the local LLM model and tokenizer (FLAN-T5)
-model_name = "google/flan-t5-base"  # Use "google/flan-t5-large" for better results
+# Load a pre-trained FLAN-T5 model and tokenizer for response generation
+model_name = "google/flan-t5-base"  # You can use a larger version like 'google/flan-t5-large'
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-llm = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+llm_model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
 print("Local LLM model loaded successfully!")
 
-# Step 13: Define the function to generate a response using the retrieved chunks and user query
-def generate_response_local(results, query):
-    # Combine retrieved chunks into a context for the LLM
-    context = "\n".join(results)
-    prompt = (
-        f"Given the following retrieved information:\n{context}\n\n"
-        f"Answer the question: {query}"
-    )
+# Function to generate a response based on the retrieved chunks and the query
+def generate_answer_from_retrieved_chunks(retrieved_chunks, query):
+    # Combine the relevant chunks into one context string
+    context = "\n".join(retrieved_chunks)
     
-    # Tokenize the prompt
+    # Create the prompt by including the context and the query
+    prompt = f"Based on the following retrieved information:\n{context}\n\nAnswer the following question: {query}"
+
+    # Tokenize the prompt for the LLM
     inputs = tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True)
-    
-    # Generate a response from the LLM
-    outputs = llm.generate(inputs["input_ids"], max_length=150, num_beams=4, early_stopping=True)
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # Generate a response using the model
+    output = llm_model.generate(inputs["input_ids"], max_length=150, num_beams=4, early_stopping=True)
+
+    # Decode the response and return it
+    response = tokenizer.decode(output[0], skip_special_tokens=True)
     return response
 
-# Step 14: Generate the final response based on retrieved chunks and user query
-final_response = generate_response_local(retrieved_chunks, user_query)
+# Generate the final answer based on the query and retrieved chunks
+final_response = generate_answer_from_retrieved_chunks(retrieved_chunks, user_query)
 
-# Print the final generated response
-print("\nGenerated Response:\n", final_response)
+# Display the generated response
+print("\nGenerated Answer:\n", final_response)
